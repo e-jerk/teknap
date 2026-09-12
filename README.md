@@ -17,7 +17,7 @@ teknap -v
 teknap -n YourNick napster.barrettharber.com
 ```
 
-Apple Silicon and Intel macOS builds are published on each `v*.*.*` release. The formula depends on `openssl@3`.
+Apple Silicon bottles are published on each `v*.*.*` release. The formula depends on `openssl@3`. Intel Macs should build from source (below) or use Docker.
 
 To tap the main repo instead of `e-jerk/homebrew-teknap`:
 

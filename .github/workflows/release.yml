@@ -24,9 +24,6 @@ jobs:
           - runner: macos-14
             zig_tarball: zig-aarch64-macos-0.16.0
             suffix: darwin-arm64
-          - runner: macos-13
-            zig_tarball: zig-x86_64-macos-0.16.0
-            suffix: darwin-amd64
     steps:
       - uses: actions/checkout@v4
 
@@ -102,8 +99,7 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           arm=$(awk '/darwin-arm64.tar.gz$/{print $1}' dist/SHA256SUMS)
-          intel=$(awk '/darwin-amd64.tar.gz$/{print $1}' dist/SHA256SUMS)
-          python3 scripts/update-formula.py "$VERSION" "$arm" "$intel"
+          python3 scripts/update-formula.py "$VERSION" "$arm"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/teknap.rb
