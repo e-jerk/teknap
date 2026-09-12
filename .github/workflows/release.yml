@@ -103,39 +103,7 @@ jobs:
         run: |
           arm=$(awk '/darwin-arm64.tar.gz$/{print $1}' dist/SHA256SUMS)
           intel=$(awk '/darwin-amd64.tar.gz$/{print $1}' dist/SHA256SUMS)
-          python3 - "$VERSION" "$arm" "$intel" <<'PY'
-          import pathlib, sys
-          version, arm, intel = sys.argv[1:]
-          pathlib.Path("Formula").mkdir(exist_ok=True)
-          pathlib.Path("Formula/teknap.rb").write_text(f'''class Teknap < Formula
-  desc "OpenNap / Napster client (naps/1 and ircs-u)"
-  homepage "https://github.com/e-jerk/teknap"
-  version "{version}"
-  license "Unlicense"
-
-  depends_on "openssl@3"
-
-  on_macos do
-    on_arm do
-      url "https://github.com/e-jerk/teknap/releases/download/v#{{version}}/teknap-#{{version}}-darwin-arm64.tar.gz"
-      sha256 "{arm}"
-    end
-    on_intel do
-      url "https://github.com/e-jerk/teknap/releases/download/v#{{version}}/teknap-#{{version}}-darwin-amd64.tar.gz"
-      sha256 "{intel}"
-    end
-  end
-
-  def install
-    bin.install "teknap"
-  end
-
-  test do
-    assert_match "TekNap", shell_output("#{{bin}}/teknap -v")
-  end
-end
-''')
-          PY
+          python3 scripts/update-formula.py "$VERSION" "$arm" "$intel"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/teknap.rb
