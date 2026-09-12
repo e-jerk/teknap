@@ -11,13 +11,14 @@ License: [UNLICENSE](UNLICENSE).
 ## Homebrew (macOS)
 
 ```bash
+brew trust --tap e-jerk/teknap
 brew tap e-jerk/teknap
 brew install teknap
 teknap -v
 teknap -n YourNick napster.barrettharber.com
 ```
 
-Apple Silicon bottles are published on each `v*.*.*` release. The formula depends on `openssl@3` and `gnupg`. Intel Macs should build from source (below) or use Docker.
+Homebrew 6 will not load a third-party tap until it is trusted. Apple Silicon bottles are published on each `v*.*.*` release. The formula depends on `openssl@3` and `gnupg`. Intel Macs should build from source (below) or use Docker.
 
 On macOS, TekNap uses your **default GnuPG secret key** (`~/.gnupg`) when it is Ed25519. No extra flags:
 
