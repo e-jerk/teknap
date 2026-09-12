@@ -187,4 +187,4 @@ git tag v2.1.1
 git push origin v2.1.1
 ```
 
-That updates `Formula/teknap.rb` bottle hashes and publishes `ghcr.io/e-jerk/teknap:2.1.1`.
+That publishes the GitHub Release and `ghcr.io/e-jerk/teknap:2.1.1`, rewrites `Formula/teknap.rb` bottle hashes, and pushes the same formula to [`e-jerk/homebrew-teknap`](https://github.com/e-jerk/homebrew-teknap) so `brew tap e-jerk/teknap && brew install teknap` picks up the new version.

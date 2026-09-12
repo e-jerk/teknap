@@ -105,7 +105,40 @@ jobs:
           git add Formula/teknap.rb
           if git diff --cached --quiet; then
             echo "formula already current"
+          else
+            git commit -m "homebrew: teknap ${VERSION} bottle hashes"
+            git push origin HEAD:main
+          fi
+
+      - name: Token for Homebrew tap
+        id: tap-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          owner: e-jerk
+          repositories: homebrew-teknap
+
+      - name: Push formula to e-jerk/teknap tap
+        env:
+          GH_TOKEN: ${{ steps.tap-token.outputs.token || secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Need vars.APP_ID + secrets.PRIVATE_KEY or secrets.HOMEBREW_TAP_TOKEN to update e-jerk/homebrew-teknap"
+            exit 1
+          fi
+          tmp=$(mktemp -d)
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/e-jerk/homebrew-teknap.git" "$tmp"
+          cp Formula/teknap.rb "$tmp/Formula/teknap.rb"
+          git -C "$tmp" config user.name "github-actions[bot]"
+          git -C "$tmp" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$tmp" add Formula/teknap.rb
+          if git -C "$tmp" diff --cached --quiet; then
+            echo "tap already current"
             exit 0
           fi
-          git commit -m "homebrew: teknap ${VERSION} bottle hashes"
-          git push origin HEAD:main
+          git -C "$tmp" commit -m "teknap ${VERSION}"
+          git -C "$tmp" push origin HEAD:main
