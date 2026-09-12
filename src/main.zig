@@ -54,6 +54,10 @@ pub fn main(init: std.process.Init) !void {
         };
     }
 
+    if (app.stream == null) {
+        app.say("Not connected. Use /server host[:port] to connect.", .{});
+    }
+
     if (options.once) {
         try runOnce(&app);
         return;

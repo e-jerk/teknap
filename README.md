@@ -2,7 +2,7 @@
 
 OpenNap / Napster client in Zig. Speaks classic Napster frames, TLS `naps/1`, and RFC 7194 `ircs-u`.
 
-This is a new implementation. It is not the original TekNap C tree and does not ship that code. Version **2.1.0** follows the 2.0.0 major bump over TekNap 1.3g.
+This is a new implementation. It is not the original TekNap C tree and does not ship that code. Version **2.1.1** follows the 2.0.0 major bump over TekNap 1.3g.
 
 Requires Zig 0.16 and OpenSSL 3. [`zust`](https://github.com/e-jerk/zust) is fetched via `build.zig.zon`.
 
@@ -20,7 +20,7 @@ teknap -n YourNick napster.barrettharber.com
 
 Homebrew 6 will not load a third-party tap until it is trusted. Apple Silicon bottles are published on each `v*.*.*` release. The formula depends on `openssl@3` and `gnupg`. Intel Macs should build from source (below) or use Docker.
 
-On macOS, TekNap uses your **default GnuPG secret key** (`~/.gnupg`) when it is Ed25519. No extra flags:
+On macOS, TekNap uses an **already-unlocked Ed25519** secret in `gpg-agent` (`~/.gnupg`). It will not prompt for old keys. Point at a specific key with `--gpg`:
 
 ```bash
 brew install gnupg
@@ -46,7 +46,7 @@ Images publish to GHCR on `main` and version tags:
 ```bash
 docker pull ghcr.io/e-jerk/teknap:latest
 # or a release
-docker pull ghcr.io/e-jerk/teknap:2.1.0
+docker pull ghcr.io/e-jerk/teknap:2.1.1
 
 docker run --rm -it --network host \
   -e NAPNICK=YourNick \
@@ -109,7 +109,7 @@ Connect and exit after login (no TTY needed):
 
 ```bash
 docker run --rm --network host \
-  ghcr.io/e-jerk/teknap:2.1.0 --once -n YourNick napster.barrettharber.com
+  ghcr.io/e-jerk/teknap:2.1.1 --once -n YourNick napster.barrettharber.com
 ```
 
 ## Linux (from source)
@@ -156,15 +156,17 @@ teknap [switches] [nickname] [server list]
   -I              TLS ircs-u (IRC lines, port 6697)
   -k              skip TLS certificate verification
   -C              create the account
-  -N              do not auto-connect
+  -N              do not auto-connect when a server is listed
   -1, --once      connect, print the session log, and exit
-  --gpg [spec]    GPG / Ed25519 key (default: system GnuPG secret)
+  --gpg [spec]    GPG / Ed25519 key (email, key id, or cached default)
   --gpg-file PATH armored secret, hex seed file, or GnuPG homedir
   --no-gpg        disable GPG
   -v              print the version
 ```
 
 Server specs: `host`, `host:port`, `tls:host`, `naps:host`, `irc:host`, `https:host`, `plain:host:port`.
+
+With no host and no `NAPSERVER`, teknap opens unconnected. Use `/server host[:port]` or pass a host on the command line. `-N` skips auto-connect when a server is listed.
 
 The directory order is TLS metaserver **8876**, then `https://host/meta` on **443**, then plaintext **8875**. The hub is **6697**.
 

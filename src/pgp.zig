@@ -115,11 +115,20 @@ pub fn extractEdSeed(src: []const u8, passphrase: []const u8) ?[32]u8 {
 }
 
 fn extractFromSexp(src: []const u8) ?[32]u8 {
-    const needle = "(d #";
-    const start = std.mem.indexOf(u8, src, needle) orelse return null;
-    const rest = src[start + needle.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, '#') orelse return null;
-    return parseHex32(rest[0..end]);
+    if (std.mem.indexOf(u8, src, "(d #")) |start| {
+        const rest = src[start + 4 ..];
+        const end = std.mem.indexOfScalar(u8, rest, '#') orelse return null;
+        if (parseHex32(rest[0..end])) |seed| return seed;
+    }
+    if (std.mem.indexOf(u8, src, "1:d32:")) |start| {
+        const rest = src[start + 6 ..];
+        if (rest.len >= 32) {
+            var out: [32]u8 = undefined;
+            @memcpy(&out, rest[0..32]);
+            return out;
+        }
+    }
+    return null;
 }
 
 fn extractFromPackets(bin: []const u8, passphrase: []const u8) ?[32]u8 {

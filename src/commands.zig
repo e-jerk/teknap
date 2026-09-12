@@ -42,7 +42,7 @@ fn serverCmd(app: *App, args: []const u8) !void {
     var p = protocol.Parser.init(args);
     const first = p.next() orelse {
         if (app.options.servers.items.len == 0) {
-            app.say("No servers configured.", .{});
+            app.say("No servers in the list. Use /server host[:port] to connect.", .{});
             return;
         }
         for (app.options.servers.items, 0..) |s, i| {

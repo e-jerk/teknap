@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const version = "TekNap-2.1.0";
+pub const version = "TekNap-2.1.1";
 pub const client_info = "TekNap 2.1";
 pub const internal_version = "20000909";
 pub const default_port: u16 = 8875;

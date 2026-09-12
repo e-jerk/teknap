@@ -176,9 +176,6 @@ pub fn parseArgs(gpa: std.mem.Allocator, env: *const std.process.Environ.Map, ar
         }
     }
 
-    if (opt.servers.items.len == 0) {
-        try opt.addServer("napster.barrettharber.com");
-    }
     return opt;
 }
 
@@ -219,7 +216,7 @@ pub const usage =
     \\  The [server list] is a whitespace separated list of server name
     \\  The [switches] may be any or all of the following
     \\   -C              create the account
-    \\   -N              do not auto-connect to the first server
+    \\   -N              do not auto-connect when a server is listed
     \\   -S #            starting server to use
     \\   -n nickname     nickname to use
     \\   -p password     password to use
@@ -230,13 +227,14 @@ pub const usage =
     \\   -I              connect with TLS ircs-u (IRC lines, port 6697)
     \\   -k              skip TLS certificate verification
     \\   -1, --once      connect, print the session log, and exit
-    \\   --gpg [spec]    use a GPG / Ed25519 key (default: system GnuPG secret)
+    \\   --gpg [spec]    use this GPG / Ed25519 key (email, key id, or default)
     \\   --gpg-file PATH armored secret, hex seed file, or GnuPG homedir
     \\   --no-gpg        disable GPG
     \\   -v              print the client version
     \\  Server specs: host:port  tls:host:port  naps:host:port  irc:host:port  https:host  plain:host:port
-    \\  Default: napster.barrettharber.com (TLS metaserver 8876, then 443 /meta, then 8875).
+    \\  With no host or NAPSERVER, opens unconnected. Use /server host[:port] to connect.
     \\  Hub: 6697 naps/1 or ircs-u. Metaserver: TLS 8876, then https://host/meta (443), then 8875.
-    \\  GPG: NAPGPG (armored secret, hex seed, path, key id, or 0 to disable), NAPGPG_PASSPHRASE.
+    \\  GPG: NAPGPG (key id / email, armored secret, hex seed, path, or 0). Default uses a cached Ed25519 key only.
+    \\  NAPGPG_PASSPHRASE unlocks that one key. --gpg you@example.com selects a key (may prompt once).
     \\
 ;

@@ -81,6 +81,7 @@ pub const App = struct {
     wire_mode: WireMode = .napster,
     cap_phase: irc.CapPhase = .none,
     gpg: gpg.Store,
+    gpg_loaded: bool = false,
     gpg_phase: GpgPhase = .idle,
     logged_in: bool = false,
     channel: ?owned.String = null,
@@ -104,10 +105,6 @@ pub const App = struct {
     last_query: ?owned.String = null,
 
     pub fn init(gpa: std.mem.Allocator, io: Io, options: *config.Options, term: *ui.Ui) !App {
-        const keys = gpg.load(gpa, io, options.gpg_spec, options.gpg_pass, options.home) catch gpg.Store{
-            .gpa = gpa,
-            .io = io,
-        };
         return .{
             .gpa = gpa,
             .io = io,
@@ -117,9 +114,21 @@ pub const App = struct {
             .nick = try owned.String.initFromSlice(gpa, options.nick),
             .password = try owned.String.initFromSlice(gpa, options.password),
             .connected_host = owned.String.init(gpa),
-            .gpg = keys,
+            .gpg = .{ .gpa = gpa, .io = io },
             .creating = options.create_account,
         };
+    }
+
+    fn ensureGpg(self: *App) void {
+        if (self.gpg_loaded) return;
+        self.gpg_loaded = true;
+        self.gpg = gpg.load(
+            self.gpa,
+            self.io,
+            self.options.gpg_spec,
+            self.options.gpg_pass,
+            self.options.home,
+        ) catch self.gpg;
     }
 
     pub fn channelName(self: *const App) ?[]const u8 {
@@ -575,6 +584,7 @@ pub const App = struct {
         self.say("Connected to {s}:{d}{s}. Logging in as {s}...", .{
             host, port, wire, self.nick.slice(),
         });
+        self.ensureGpg();
         if (self.gpg.enabled) {
             self.say("GPG: {s}.", .{self.gpg.label});
         } else if (!std.mem.eql(u8, self.options.gpg_spec, "default") and
