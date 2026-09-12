@@ -38,6 +38,8 @@ pub const Options = struct {
     force_irc: bool = false,
     insecure: bool = false,
     once: bool = false,
+    gpg_spec: []u8,
+    gpg_pass: []u8 = &.{},
     servers: std.ArrayList(ServerEntry) = .empty,
     start_index: usize = 0,
     extra_rc: ?[]u8 = null,
@@ -51,6 +53,8 @@ pub const Options = struct {
         self.gpa.free(self.download_dir);
         if (self.share_dir) |s| self.gpa.free(s);
         if (self.extra_rc) |s| self.gpa.free(s);
+        self.gpa.free(self.gpg_spec);
+        if (self.gpg_pass.len != 0) self.gpa.free(self.gpg_pass);
         for (self.servers.items) |s| s.deinit(self.gpa);
         self.servers.deinit(self.gpa);
     }
@@ -79,6 +83,8 @@ pub fn parseArgs(gpa: std.mem.Allocator, env: *const std.process.Environ.Map, ar
         .home = try gpa.dupe(u8, home),
         .rc_path = try std.fmt.allocPrint(gpa, "{s}/.teknaprc", .{home}),
         .download_dir = try std.fmt.allocPrint(gpa, "{s}/TekNap", .{home}),
+        .gpg_spec = try gpa.dupe(u8, env.get("NAPGPG") orelse "default"),
+        .gpg_pass = try gpa.dupe(u8, env.get("NAPGPG_PASSPHRASE") orelse ""),
     };
     errdefer opt.deinit();
 
@@ -124,6 +130,18 @@ pub fn parseArgs(gpa: std.mem.Allocator, env: *const std.process.Environ.Map, ar
             opt.insecure = true;
         } else if (std.mem.eql(u8, a, "-1") or std.mem.eql(u8, a, "--once")) {
             opt.once = true;
+        } else if (std.mem.eql(u8, a, "--no-gpg")) {
+            gpa.free(opt.gpg_spec);
+            opt.gpg_spec = try gpa.dupe(u8, "off");
+        } else if ((std.mem.eql(u8, a, "--gpg") or std.mem.eql(u8, a, "--gpg-file")) and
+            i + 1 < args.len and args[i + 1].len > 0 and args[i + 1][0] != '-')
+        {
+            i += 1;
+            gpa.free(opt.gpg_spec);
+            opt.gpg_spec = try gpa.dupe(u8, args[i]);
+        } else if (std.mem.eql(u8, a, "--gpg")) {
+            gpa.free(opt.gpg_spec);
+            opt.gpg_spec = try gpa.dupe(u8, "default");
         } else if (std.mem.eql(u8, a, "-n") and i + 1 < args.len) {
             i += 1;
             gpa.free(opt.nick);
@@ -212,9 +230,13 @@ pub const usage =
     \\   -I              connect with TLS ircs-u (IRC lines, port 6697)
     \\   -k              skip TLS certificate verification
     \\   -1, --once      connect, print the session log, and exit
+    \\   --gpg [spec]    use a GPG / Ed25519 key (default: system GnuPG secret)
+    \\   --gpg-file PATH armored secret, hex seed file, or GnuPG homedir
+    \\   --no-gpg        disable GPG
     \\   -v              print the client version
     \\  Server specs: host:port  tls:host:port  naps:host:port  irc:host:port  https:host  plain:host:port
     \\  Default: napster.barrettharber.com (TLS metaserver 8876, then 443 /meta, then 8875).
     \\  Hub: 6697 naps/1 or ircs-u. Metaserver: TLS 8876, then https://host/meta (443), then 8875.
+    \\  GPG: NAPGPG (armored secret, hex seed, path, key id, or 0 to disable), NAPGPG_PASSPHRASE.
     \\
 ;

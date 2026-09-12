@@ -1,7 +1,7 @@
 const std = @import("std");
 
-pub const version = "TekNap-2.0.0";
-pub const client_info = "TekNap 2.0";
+pub const version = "TekNap-2.1.0";
+pub const client_info = "TekNap 2.1";
 pub const internal_version = "20000909";
 pub const default_port: u16 = 8875;
 /// OpenNap metaserver immediate-TLS listen (`metaserver -T`).
@@ -206,6 +206,7 @@ pub const Cmd = enum(u16) {
     session_resume = 11026,
     account = 11027,
     sts = 11028,
+    key_out = 11029,
     key = 11030,
     server_user_sharing = 10012,
     _,

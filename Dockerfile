@@ -53,7 +53,7 @@ RUN --mount=type=cache,id=teknap-zig-global,target=/zig-cache/global \
 
 FROM alpine:3.22
 
-RUN apk add --no-cache libssl3 ca-certificates
+RUN apk add --no-cache libssl3 ca-certificates gnupg
 
 COPY --from=build /export/teknap /usr/local/bin/teknap
 COPY --from=build /export/build-id /usr/local/share/teknap-build-id

@@ -1,10 +1,11 @@
 class Teknap < Formula
   desc "OpenNap / Napster client (naps/1 and ircs-u)"
   homepage "https://github.com/e-jerk/teknap"
-  version "2.0.0"
+  version "2.1.0"
   license "Unlicense"
 
   depends_on "openssl@3"
+  depends_on "gnupg"
 
   on_macos do
     on_arm do

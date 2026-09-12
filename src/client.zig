@@ -9,8 +9,12 @@ const share = @import("share.zig");
 const commands = @import("commands.zig");
 const tls = @import("tls.zig");
 const irc = @import("irc.zig");
+const gpg = @import("gpg.zig");
+const pgp = @import("pgp.zig");
 const safe = @import("safe");
 const owned = @import("owned.zig");
+
+const GpgPhase = enum { idle, wait_plus, wait_challenge, done, failed };
 
 pub const WireMode = enum { napster, irc };
 
@@ -76,6 +80,8 @@ pub const App = struct {
     connected_irc: bool = false,
     wire_mode: WireMode = .napster,
     cap_phase: irc.CapPhase = .none,
+    gpg: gpg.Store,
+    gpg_phase: GpgPhase = .idle,
     logged_in: bool = false,
     channel: ?owned.String = null,
     topic: ?owned.String = null,
@@ -98,6 +104,10 @@ pub const App = struct {
     last_query: ?owned.String = null,
 
     pub fn init(gpa: std.mem.Allocator, io: Io, options: *config.Options, term: *ui.Ui) !App {
+        const keys = gpg.load(gpa, io, options.gpg_spec, options.gpg_pass, options.home) catch gpg.Store{
+            .gpa = gpa,
+            .io = io,
+        };
         return .{
             .gpa = gpa,
             .io = io,
@@ -107,6 +117,7 @@ pub const App = struct {
             .nick = try owned.String.initFromSlice(gpa, options.nick),
             .password = try owned.String.initFromSlice(gpa, options.password),
             .connected_host = owned.String.init(gpa),
+            .gpg = keys,
             .creating = options.create_account,
         };
     }
@@ -129,6 +140,7 @@ pub const App = struct {
         self.nick.deinit();
         self.password.deinit();
         self.connected_host.deinit();
+        self.gpg.deinit();
         owned.clearOpt(&self.channel);
         owned.clearOpt(&self.topic);
         owned.clearOpt(&self.email);
@@ -176,6 +188,7 @@ pub const App = struct {
         self.connected_irc = false;
         self.wire_mode = .napster;
         self.cap_phase = .none;
+        self.gpg_phase = .idle;
         self.recv.clear();
     }
 
@@ -562,6 +575,14 @@ pub const App = struct {
         self.say("Connected to {s}:{d}{s}. Logging in as {s}...", .{
             host, port, wire, self.nick.slice(),
         });
+        if (self.gpg.enabled) {
+            self.say("GPG: {s}.", .{self.gpg.label});
+        } else if (!std.mem.eql(u8, self.options.gpg_spec, "default") and
+            !std.mem.eql(u8, self.options.gpg_spec, "off") and
+            !std.mem.eql(u8, self.options.gpg_spec, "0"))
+        {
+            self.yell("GPG: could not load an Ed25519 secret from NAPGPG.", .{});
+        }
         if (use_irc) {
             self.cap_phase = .wait_ls;
             self.sendIrcRaw("CAP LS 302") catch {};
@@ -589,30 +610,209 @@ pub const App = struct {
 
     fn onCapNapster(self: *App, payload: []const u8) void {
         var p = protocol.Parser.init(payload);
-        const sub = p.next() orelse return;
-        if (!util.eqlIgnoreCase(sub, "LS")) return;
-        self.sendFmt(.cap, "REQ server-time message-tags echo-message batch labeled-response account-tag away-notify chathistory", .{}) catch {};
-        self.sendFmt(.cap, "END", .{}) catch {};
-        if (self.cap_phase == .wait_ls and !self.logged_in) {
-            self.cap_phase = .done;
-            if (self.creating) {
-                self.sendFmt(.create_user, "{s}", .{self.nick.slice()}) catch {};
-            } else {
-                self.login() catch {};
+        var sub = p.next() orelse return;
+        if (std.mem.eql(u8, sub, "*") or std.mem.eql(u8, sub, self.nick.slice())) {
+            sub = p.next() orelse return;
+        }
+        if (util.eqlIgnoreCase(sub, "LS")) {
+            self.sendCapReq();
+            if (self.gpg.enabled) {
+                self.cap_phase = .wait_ack;
+                return;
             }
+            self.sendFmt(.cap, "END", .{}) catch {};
+            self.finishPasswordLogin();
+            return;
+        }
+        if (util.eqlIgnoreCase(sub, "ACK") and self.cap_phase == .wait_ack) {
+            self.startGpgAuth();
+            return;
+        }
+        if (util.eqlIgnoreCase(sub, "NAK")) {
+            self.yell("CAP NAK: {s}", .{p.remainder()});
+            self.sendFmt(.cap, "END", .{}) catch {};
+            self.finishPasswordLogin();
         }
     }
 
     fn ircLoginAfterCap(self: *App) void {
         var buf: [256]u8 = undefined;
-        if (!self.password.isEmpty()) {
-            const pass = std.fmt.bufPrint(&buf, "PASS {s}", .{self.password.slice()}) catch return;
-            self.sendIrcRaw(pass) catch {};
+        const pass = self.loginPassword();
+        if (pass.len != 0) {
+            const line = std.fmt.bufPrint(&buf, "PASS {s}", .{pass}) catch return;
+            self.sendIrcRaw(line) catch {};
         }
         const nick = std.fmt.bufPrint(&buf, "NICK {s}", .{self.nick.slice()}) catch return;
         self.sendIrcRaw(nick) catch {};
         const user = std.fmt.bufPrint(&buf, "USER {s} 0 * :{s}", .{ self.nick.slice(), self.nick.slice() }) catch return;
         self.sendIrcRaw(user) catch {};
+    }
+
+    fn sendCapReq(self: *App) void {
+        const line = if (self.gpg.enabled)
+            "REQ sasl draft/gpg server-time message-tags echo-message batch labeled-response account-tag away-notify chathistory"
+        else
+            "REQ server-time message-tags echo-message batch labeled-response account-tag away-notify chathistory";
+        if (self.wire_mode == .irc) {
+            var buf: [256]u8 = undefined;
+            const raw = std.fmt.bufPrint(&buf, "CAP {s}", .{line}) catch return;
+            self.sendIrcRaw(raw) catch {};
+        } else {
+            self.sendFmt(.cap, "{s}", .{line}) catch {};
+        }
+    }
+
+    fn startGpgAuth(self: *App) void {
+        if (!self.gpg.enabled) {
+            self.endCapAndLogin();
+            return;
+        }
+        var key_buf: [256]u8 = undefined;
+        const pubhex = self.gpg.publicHex(&key_buf) catch {
+            self.yell("GPG: could not export a public key.", .{});
+            self.endCapAndLogin();
+            return;
+        };
+        self.sendFmt(.key_out, "SET {s}", .{pubhex}) catch {};
+        self.sendFmt(.authenticate, "GPG", .{}) catch {};
+        self.gpg_phase = .wait_plus;
+        self.say("GPG: SASL starting…", .{});
+    }
+
+    fn endCapAndLogin(self: *App) void {
+        if (self.wire_mode == .irc) {
+            self.sendIrcRaw("CAP END") catch {};
+            self.ircLoginAfterCap();
+        } else {
+            self.sendFmt(.cap, "END", .{}) catch {};
+            self.finishPasswordLogin();
+        }
+        self.cap_phase = .done;
+    }
+
+    fn finishPasswordLogin(self: *App) void {
+        self.cap_phase = .done;
+        if (self.logged_in) return;
+        if (self.creating) {
+            self.sendFmt(.create_user, "{s}", .{self.nick.slice()}) catch {};
+        } else {
+            self.login() catch {};
+        }
+    }
+
+    fn loginPassword(self: *const App) []const u8 {
+        if (self.gpg_phase == .done) return "*";
+        return self.password.slice();
+    }
+
+    fn onAuthenticate(self: *App, payload: []const u8) void {
+        const arg = std.mem.trim(u8, payload, " \t\r\n");
+        if (util.eqlIgnoreCase(arg, "+")) {
+            if (self.gpg.enabled and self.gpg_phase == .wait_plus) {
+                self.sendFmt(.authenticate, "{s}", .{self.nick.slice()}) catch {};
+                self.gpg_phase = .wait_challenge;
+                return;
+            }
+            var plain: [256]u8 = undefined;
+            const cred = std.fmt.bufPrint(&plain, "\x00{s}\x00{s}", .{ self.nick.slice(), self.loginPassword() }) catch return;
+            var enc: [384]u8 = undefined;
+            const b64 = std.base64.standard.Encoder.encode(enc[0..], cred);
+            self.sendFmt(.authenticate, "{s}", .{b64}) catch {};
+            return;
+        }
+        if (util.eqlIgnoreCase(arg, "SUCCESS")) {
+            if (self.gpg_phase == .done) return;
+            self.gpg_phase = .done;
+            self.say("GPG: SASL success.", .{});
+            self.endCapAndLogin();
+            return;
+        }
+        if (util.eqlIgnoreCase(arg, "FAIL") or util.eqlIgnoreCase(arg, "ABORT")) {
+            self.gpg_phase = .failed;
+            self.yell("GPG: SASL failed; trying the account password.", .{});
+            self.endCapAndLogin();
+            return;
+        }
+        if (self.gpg_phase == .wait_challenge or self.gpg_phase == .wait_plus) {
+            self.signAuthChallenge(arg);
+        }
+    }
+
+    fn signAuthChallenge(self: *App, b64: []const u8) void {
+        var doc: [512]u8 = undefined;
+        const dec = std.base64.standard.Decoder;
+        const n = dec.calcSizeForSlice(b64) catch {
+            self.yell("GPG: bad SASL challenge.", .{});
+            self.gpg_phase = .failed;
+            self.endCapAndLogin();
+            return;
+        };
+        if (n > doc.len) {
+            self.yell("GPG: SASL challenge too large.", .{});
+            self.gpg_phase = .failed;
+            self.endCapAndLogin();
+            return;
+        }
+        dec.decode(doc[0..n], b64) catch {
+            self.yell("GPG: could not decode SASL challenge.", .{});
+            self.gpg_phase = .failed;
+            self.endCapAndLogin();
+            return;
+        };
+        const sig = self.gpg.signHex(doc[0..n]) catch {
+            self.yell("GPG: sign failed.", .{});
+            self.gpg_phase = .failed;
+            self.endCapAndLogin();
+            return;
+        };
+        defer self.gpa.free(sig);
+        self.sendFmt(.authenticate, "{s}", .{sig}) catch {};
+    }
+
+    fn onKeyLine(self: *App, payload: []const u8) void {
+        var p = protocol.Parser.init(payload);
+        var sub = p.next() orelse return;
+        if (std.mem.eql(u8, sub, self.nick.slice())) {
+            sub = p.next() orelse return;
+        }
+        if (util.eqlIgnoreCase(sub, "CHALLENGE")) {
+            const nonce = p.next() orelse return;
+            const server = p.next() orelse self.connected_host.slice();
+            var doc_buf: [256]u8 = undefined;
+            const doc = pgp.bindDocument(&doc_buf, server, self.nick.slice(), nonce);
+            const sig = self.gpg.signHex(doc) catch {
+                self.yell("GPG: KEY PROVE sign failed.", .{});
+                return;
+            };
+            defer self.gpa.free(sig);
+            self.sendFmt(.key_out, "PROVE {s}", .{sig}) catch {};
+            self.say("GPG: proving key to {s}.", .{server});
+            return;
+        }
+        if (util.eqlIgnoreCase(sub, "PENDING")) {
+            self.say("GPG: public key offered.", .{});
+            return;
+        }
+        if (util.eqlIgnoreCase(sub, "PUB") or util.eqlIgnoreCase(sub, "GONE") or
+            util.eqlIgnoreCase(sub, "NONE"))
+        {
+            self.ui.logLine(.server, "KEY {s}", .{payload});
+        }
+    }
+
+    fn offerKeyAfterLogin(self: *App) void {
+        if (!self.gpg.enabled or self.gpg_phase == .done) return;
+        var key_buf: [256]u8 = undefined;
+        const pubhex = self.gpg.publicHex(&key_buf) catch return;
+        self.sendFmt(.key_out, "SET {s}", .{pubhex}) catch {};
+    }
+
+    fn isKeyNotice(_: *App, text: []const u8) bool {
+        return std.mem.startsWith(u8, text, "CHALLENGE ") or
+            std.mem.startsWith(u8, text, "PENDING ") or
+            std.mem.startsWith(u8, text, "PUB ") or
+            std.mem.startsWith(u8, text, "GONE ") or
+            std.mem.startsWith(u8, text, "NONE ");
     }
 
     fn listenData(self: *App) void {
@@ -635,10 +835,10 @@ pub const App = struct {
     }
 
     pub fn login(self: *App) !void {
-        const info = if (self.connected_tls) "TekNap 2.0 naps/1" else protocol.client_info;
+        const info = if (self.connected_tls) "TekNap 2.1 naps/1" else protocol.client_info;
         try self.sendFmt(.login, "{s} {s} {d} \"{s}\" {d} 5201 0", .{
             self.nick.slice(),
-            self.password.slice(),
+            self.loginPassword(),
             self.options.dataport,
             info,
             self.options.speed,
@@ -649,7 +849,7 @@ pub const App = struct {
     }
 
     pub fn register(self: *App, email: []const u8) !void {
-        const info = if (self.connected_tls) "TekNap 2.0 naps/1" else protocol.client_info;
+        const info = if (self.connected_tls) "TekNap 2.1 naps/1" else protocol.client_info;
         try self.sendFmt(.register_info, "{s} {s} {d} \"{s}\" {d} {s}", .{
             self.nick.slice(),
             self.password.slice(),
@@ -744,26 +944,41 @@ pub const App = struct {
             _ = p.next();
             const sub = p.next() orelse return;
             if (util.eqlIgnoreCase(sub, "LS") and self.cap_phase == .wait_ls) {
-                self.sendIrcRaw("CAP REQ server-time message-tags echo-message batch labeled-response account-tag away-notify chathistory") catch {};
-                self.sendIrcRaw("CAP END") catch {};
-                self.ircLoginAfterCap();
-                self.cap_phase = .wait_ack;
+                self.sendCapReq();
+                if (self.gpg.enabled) {
+                    self.cap_phase = .wait_ack;
+                } else {
+                    self.sendIrcRaw("CAP END") catch {};
+                    self.ircLoginAfterCap();
+                    self.cap_phase = .done;
+                }
+            } else if (util.eqlIgnoreCase(sub, "ACK") and self.cap_phase == .wait_ack) {
+                self.startGpgAuth();
             } else if (util.eqlIgnoreCase(sub, "NAK")) {
                 self.yell("CAP NAK: {s}", .{p.remainder()});
+                self.sendIrcRaw("CAP END") catch {};
+                self.ircLoginAfterCap();
+                self.cap_phase = .done;
             }
             return;
         }
 
         if (irc.eql(cmd, "AUTHENTICATE")) {
             const p = irc.splitParams(params);
-            if (util.eqlIgnoreCase(p.head, "+")) {
-                var plain: [256]u8 = undefined;
-                const cred = std.fmt.bufPrint(&plain, "\x00{s}\x00{s}", .{ self.nick.slice(), self.password.slice() }) catch return;
-                var enc: [384]u8 = undefined;
-                const b64 = std.base64.standard.Encoder.encode(enc[0..], cred);
-                var line_buf: [512]u8 = undefined;
-                const auth = std.fmt.bufPrint(&line_buf, "AUTHENTICATE {s}", .{b64}) catch return;
-                self.sendIrcRaw(auth) catch {};
+            self.onAuthenticate(if (p.head.len > 0) p.head else p.rest);
+            return;
+        }
+
+        if (irc.eql(cmd, "KEY")) {
+            self.onKeyLine(params);
+            return;
+        }
+
+        if (irc.eql(cmd, "FAIL")) {
+            if (std.mem.indexOf(u8, params, "AUTHENTICATE") != null) {
+                self.onAuthenticate("FAIL");
+            } else {
+                self.ui.logLine(.error_msg, "FAIL {s}", .{params});
             }
             return;
         }
@@ -781,6 +996,10 @@ pub const App = struct {
             const p = irc.splitParams(params);
             const nick = nickFromPrefix(line.prefix);
             const text = if (p.rest.len > 0) p.rest else p.head;
+            if (irc.eql(cmd, "NOTICE") and std.mem.indexOfScalar(u8, line.prefix, '!') == null and self.isKeyNotice(text)) {
+                self.onKeyLine(text);
+                return;
+            }
             if (self.ignored(nick) or self.isOwnNick(nick)) return;
             if (irc.isPublicTarget(p.head)) {
                 self.ui.logLine(.public_msg, "[{s}] <{s}> {s}", .{ p.head, nick, text });
@@ -840,7 +1059,15 @@ pub const App = struct {
                         self.cap_phase = .done;
                         self.creating = false;
                         self.say("Login accepted (IRC).", .{});
+                        self.offerKeyAfterLogin();
                     }
+                },
+                900, 903 => {
+                    if (self.gpg.enabled) self.onAuthenticate("SUCCESS");
+                },
+                904, 905, 906 => {
+                    if (self.gpg_phase == .wait_plus or self.gpg_phase == .wait_challenge)
+                        self.onAuthenticate("FAIL");
                 },
                 2, 3, 4, 5 => self.ui.logLine(.server, "{s}", .{params}),
                 311, 312, 317, 318, 319, 330, 331, 335, 336, 337, 338, 369 =>
@@ -913,6 +1140,7 @@ pub const App = struct {
                 self.creating = false;
                 self.say("Login accepted. Email: {s}", .{payload});
                 self.resendShares();
+                self.offerKeyAfterLogin();
             },
             .created => {
                 self.say("Nickname available. Sending registration...", .{});
@@ -1068,8 +1296,16 @@ pub const App = struct {
             .away_notice, .away_set => self.ui.logLine(.info, "Away: {s}", .{payload}),
             .server_user_sharing => {},
             .account, .session_resume, .sts => {},
-            .authenticate_challenge, .key,
-            .batch, .batch_end, .fail, .warn, .note,
+            .authenticate, .authenticate_challenge => self.onAuthenticate(payload),
+            .key => self.onKeyLine(payload),
+            .fail => {
+                if (std.mem.indexOf(u8, payload, "AUTHENTICATE") != null) {
+                    self.onAuthenticate("FAIL");
+                } else {
+                    self.ui.logLine(.error_msg, "FAIL {s}", .{payload});
+                }
+            },
+            .batch, .batch_end, .warn, .note,
             .chathistory_line, .chathistory_end, .tagmsg, .redact, .edit =>
                 self.ui.logLine(.server, "[{d}] {s}", .{ command, payload }),
             else => {

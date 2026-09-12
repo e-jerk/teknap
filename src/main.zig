@@ -40,7 +40,7 @@ pub fn main(init: std.process.Init) !void {
     defer app.deinit();
 
     app.say("{s} — Napster / OpenNap client", .{protocol.version});
-    app.say("Type /help for commands. Environment: NAPNICK NAPPASS NAPSERVER NAPPORT.", .{});
+    app.say("Type /help for commands. Environment: NAPNICK NAPPASS NAPSERVER NAPGPG.", .{});
     app.updateStatus();
 
     commands.loadRc(&app, options.rc_path);
@@ -153,4 +153,6 @@ test {
     _ = @import("tls.zig");
     _ = @import("irc.zig");
     _ = @import("owned.zig");
+    _ = @import("pgp.zig");
+    _ = @import("gpg.zig");
 }

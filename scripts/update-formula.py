@@ -12,6 +12,7 @@ pathlib.Path("Formula/teknap.rb").write_text(
   license "Unlicense"
 
   depends_on "openssl@3"
+  depends_on "gnupg"
 
   on_macos do
     on_arm do

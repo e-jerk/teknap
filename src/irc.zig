@@ -107,6 +107,7 @@ pub fn napsterToIrc(cmd: protocol.Cmd, payload: []const u8, buf: []u8) ?[]const 
         },
         .cap => return std.fmt.bufPrint(buf, "CAP {s}", .{payload}) catch null,
         .authenticate => return std.fmt.bufPrint(buf, "AUTHENTICATE {s}", .{payload}) catch null,
+        .key_out => return std.fmt.bufPrint(buf, "KEY {s}", .{payload}) catch null,
         .list_channels => return std.fmt.bufPrint(buf, "LIST", .{}) catch null,
         .names => return std.fmt.bufPrint(buf, "NAMES {s}", .{std.mem.trim(u8, payload, " ")}) catch null,
         else => return null,
