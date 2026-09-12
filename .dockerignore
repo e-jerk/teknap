@@ -1,0 +1,10 @@
+.git
+.github
+.zig-cache
+zig-out
+zig-pkg
+Formula
+*.md
+UNLICENSE
+.dockerignore
+.gitignore

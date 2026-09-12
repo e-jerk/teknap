@@ -1,0 +1,17 @@
+.{
+    .name = .teknap,
+    .version = "2.0.0",
+    .fingerprint = 0xf22eabbb2a397454,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zust = .{
+            .url = "git+https://github.com/e-jerk/zust#e6b7af25167ee7b4f2c764becae6d5d2ca20d90a",
+            .hash = "zust-0.2.0-795McVi2CADdRv915jIvI-fYUAzOX3LQzeaTNS4UWICS",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

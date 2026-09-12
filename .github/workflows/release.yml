@@ -1,0 +1,147 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (for example v2.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.suffix }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            zig_tarball: zig-aarch64-macos-0.16.0
+            suffix: darwin-arm64
+          - runner: macos-13
+            zig_tarball: zig-x86_64-macos-0.16.0
+            suffix: darwin-amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: ver
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Zig
+        run: |
+          curl -fsSL "https://ziglang.org/download/0.16.0/${{ matrix.zig_tarball }}.tar.xz" | tar -xJ
+          echo "$PWD/${{ matrix.zig_tarball }}" >> "$GITHUB_PATH"
+
+      - name: OpenSSL
+        run: brew install openssl@3
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseSafe -Dcpu=baseline
+
+      - name: Package
+        run: |
+          name="teknap-${{ steps.ver.outputs.version }}-${{ matrix.suffix }}"
+          mkdir -p dist
+          tar -C zig-out/bin -czf "dist/${name}.tar.gz" teknap
+          shasum -a 256 "dist/${name}.tar.gz" | tee "dist/${name}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.suffix }}
+          path: dist/*
+
+  publish:
+    name: Publish GitHub release
+    needs: macos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Version
+        id: ver
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          cat *.sha256 > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: TekNap ${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: dist/*
+
+      - name: Update Homebrew formula
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          arm=$(awk '/darwin-arm64.tar.gz$/{print $1}' dist/SHA256SUMS)
+          intel=$(awk '/darwin-amd64.tar.gz$/{print $1}' dist/SHA256SUMS)
+          python3 - "$VERSION" "$arm" "$intel" <<'PY'
+          import pathlib, sys
+          version, arm, intel = sys.argv[1:]
+          pathlib.Path("Formula").mkdir(exist_ok=True)
+          pathlib.Path("Formula/teknap.rb").write_text(f'''class Teknap < Formula
+  desc "OpenNap / Napster client (naps/1 and ircs-u)"
+  homepage "https://github.com/e-jerk/teknap"
+  version "{version}"
+  license "Unlicense"
+
+  depends_on "openssl@3"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/e-jerk/teknap/releases/download/v#{{version}}/teknap-#{{version}}-darwin-arm64.tar.gz"
+      sha256 "{arm}"
+    end
+    on_intel do
+      url "https://github.com/e-jerk/teknap/releases/download/v#{{version}}/teknap-#{{version}}-darwin-amd64.tar.gz"
+      sha256 "{intel}"
+    end
+  end
+
+  def install
+    bin.install "teknap"
+  end
+
+  test do
+    assert_match "TekNap", shell_output("#{{bin}}/teknap -v")
+  end
+end
+''')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/teknap.rb
+          if git diff --cached --quiet; then
+            echo "formula already current"
+            exit 0
+          fi
+          git commit -m "homebrew: teknap ${VERSION} bottle hashes"
+          git push origin HEAD:main
